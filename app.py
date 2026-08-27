@@ -114,6 +114,67 @@ def get_api_data(url, params):
         return None, 0
     return res, total
 
+def fetch_all_pages_with_error(url, params, load_limit=1000):
+    with st.spinner("실시간 데이터를 수집하는 중..."):
+        params = dict(params)
+        params["pageNo"] = 1
+        params["numOfRows"] = load_limit
+
+        params_tuple = tuple(sorted(params.items()))
+        items, total = fetch_api_data_cached(url, params_tuple)
+        if isinstance(items, dict) and "error" in items:
+            return None, 0, items["error"]
+
+        all_items = list(items)
+        if total > len(items):
+            import math
+            total_pages = math.ceil(total / load_limit)
+            progress_bar = st.progress(0.1, text=f"전체 데이터를 수집 중... (1/{total_pages} 페이지)")
+
+            for page in range(2, total_pages + 1):
+                params["pageNo"] = page
+                params_tuple = tuple(sorted(params.items()))
+                page_items, _ = fetch_api_data_cached(url, params_tuple)
+                if isinstance(page_items, dict) and "error" in page_items:
+                    progress_bar.empty()
+                    return None, 0, page_items["error"]
+                if page_items:
+                    all_items.extend(page_items)
+                progress_bar.progress(page / total_pages, text=f"전체 데이터를 수집 중... ({page}/{total_pages} 페이지)")
+            progress_bar.empty()
+
+        return all_items, total, None
+
+def fetch_all_pages_with_fallback(url, params_candidates, load_limit=1000):
+    last_error = None
+    for params in params_candidates:
+        items, total, error = fetch_all_pages_with_error(url, params, load_limit=load_limit)
+        if items is not None:
+            return items, total, None
+        last_error = error
+    return None, 0, last_error
+
+def build_multi_options(df, column):
+    if column in df.columns:
+        return sorted([v for v in df[column].dropna().astype(str).unique() if v != ""])
+    return []
+
+def apply_multi_select_filter(df, column, selected_values):
+    if column in df.columns and selected_values:
+        return df[df[column].astype(str).isin(selected_values)]
+    return df
+
+def ensure_data_loaded(session_key, url, params_candidates):
+    if st.session_state.get(session_key):
+        return
+
+    items, total, error = fetch_all_pages_with_fallback(url, params_candidates)
+    if items is not None:
+        st.session_state[session_key] = items
+        st.session_state[f"{session_key}_total"] = total
+    elif error:
+        st.error(error)
+
 # 데이터 전체 호출 헬퍼 함수
 def fetch_all_pages(url, params, load_limit=1000):
     with st.spinner("실시간 데이터를 수집하는 중..."):
@@ -162,26 +223,25 @@ if selected_menu == "🎓 교육 과정":
         st.session_state["edu_data"] = []
         st.session_state["edu_total"] = 0
 
+    ensure_data_loaded(
+        "edu_data",
+        "https://openapi.50plus.or.kr/openapi/service/education/list",
+        [{"_type": "json", "accessKey": api_key, "year": year}]
+    )
+
     st.markdown("### 🔍 조건 필터 및 상세 검색")
     
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         search_word = st.text_input("강좌명 / 강사명 검색", "", key="edu_f_word")
     with c2:
-        # 최초 로딩된 데이터가 없으면 임시 선택지만 노출
-        if st.session_state["edu_data"]:
-            temp_df = pd.DataFrame(st.session_state["edu_data"])
-            org_options = ["전체"] + sorted(list(temp_df["orgNm"].dropna().unique())) if "orgNm" in temp_df.columns else ["전체"]
-        else:
-            org_options = ["전체"]
-        sel_org = st.selectbox("개설 기관 선택", org_options, key="edu_f_org")
+        temp_df = pd.DataFrame(st.session_state["edu_data"]) if st.session_state["edu_data"] else pd.DataFrame()
+        org_options = build_multi_options(temp_df, "orgNm")
+        sel_org = st.multiselect("개설 기관 선택", org_options, placeholder="선택하지 않으면 전체", key="edu_f_org")
     with c3:
-        if st.session_state["edu_data"]:
-            temp_df = pd.DataFrame(st.session_state["edu_data"])
-            stat_options = ["전체"] + list(temp_df["lctStatView"].dropna().unique()) if "lctStatView" in temp_df.columns else ["전체"]
-        else:
-            stat_options = ["전체"]
-        sel_stat = st.selectbox("모집 상태 선택", stat_options, key="edu_f_stat")
+        temp_df = pd.DataFrame(st.session_state["edu_data"]) if st.session_state["edu_data"] else pd.DataFrame()
+        stat_options = build_multi_options(temp_df, "lctStatView")
+        sel_stat = st.multiselect("모집 상태 선택", stat_options, placeholder="선택하지 않으면 전체", key="edu_f_stat")
     with c4:
         cost_option = st.selectbox("수강료 구분", ["전체", "무료", "유료"], key="edu_f_cost")
         
@@ -202,22 +262,6 @@ if selected_menu == "🎓 교육 과정":
                     pass
         selected_max_cost = st.slider("최대 수강료 범위(원)", 0, max_cost_limit, max_cost_limit, step=5000, key="edu_cost_slider")
 
-    # 필터 하단에 검색 버튼 배치
-    search_btn = st.button("🔍 검색", key="edu_btn", use_container_width=True)
-    
-    if search_btn:
-        url = "https://openapi.50plus.or.kr/openapi/service/education/list"
-        params = {
-            "_type": "json",
-            "accessKey": api_key,
-            "year": year
-        }
-        all_items, total = fetch_all_pages(url, params)
-        if all_items is not None:
-            st.session_state["edu_data"] = all_items
-            st.session_state["edu_total"] = total
-            st.rerun() # 기관/상태 selectbox 옵션 동적 갱신용
-                
     if st.session_state["edu_data"]:
         df = pd.DataFrame(st.session_state["edu_data"])
         
@@ -245,10 +289,8 @@ if selected_menu == "🎓 교육 과정":
             lctr_mask = filtered_df["대표강사"].astype(str).str.contains(search_word, case=False, na=False) if "대표강사" in filtered_df.columns else False
             filtered_df = filtered_df[name_mask | lctr_mask]
             
-        if "개설기관" in filtered_df.columns and sel_org != "전체":
-            filtered_df = filtered_df[filtered_df["개설기관"] == sel_org]
-        if "모집상태" in filtered_df.columns and sel_stat != "전체":
-            filtered_df = filtered_df[filtered_df["모집상태"] == sel_stat]
+        filtered_df = apply_multi_select_filter(filtered_df, "개설기관", sel_org)
+        filtered_df = apply_multi_select_filter(filtered_df, "모집상태", sel_stat)
             
         if "수강료(원)" in filtered_df.columns:
             try:
@@ -295,23 +337,23 @@ elif selected_menu == "🏢 시설 대관":
     if "rent_data" not in st.session_state:
         st.session_state["rent_data"] = []
         st.session_state["rent_total"] = 0
+
+    ensure_data_loaded(
+        "rent_data",
+        "https://openapi.50plus.or.kr/openapi/service/rental/list",
+        [{"_type": "json", "accessKey": api_key, "year": year}]
+    )
         
     st.markdown("### 🔍 조건 필터 및 상세 검색")
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.session_state["rent_data"]:
-            temp_df = pd.DataFrame(st.session_state["rent_data"])
-            org_options = ["전체"] + sorted(list(temp_df["orgNm"].dropna().unique())) if "orgNm" in temp_df.columns else ["전체"]
-        else:
-            org_options = ["전체"]
-        sel_org = st.selectbox("기관 선택", org_options, key="rent_f_org")
+        temp_df = pd.DataFrame(st.session_state["rent_data"]) if st.session_state["rent_data"] else pd.DataFrame()
+        org_options = build_multi_options(temp_df, "orgNm")
+        sel_org = st.multiselect("기관 선택", org_options, placeholder="선택하지 않으면 전체", key="rent_f_org")
     with c2:
-        if st.session_state["rent_data"]:
-            temp_df = pd.DataFrame(st.session_state["rent_data"])
-            stat_options = ["전체"] + list(temp_df["bookingStatNm"].dropna().unique()) if "bookingStatNm" in temp_df.columns else ["전체"]
-        else:
-            stat_options = ["전체"]
-        sel_stat = st.selectbox("예약 유형 선택", stat_options, key="rent_f_stat")
+        temp_df = pd.DataFrame(st.session_state["rent_data"]) if st.session_state["rent_data"] else pd.DataFrame()
+        stat_options = build_multi_options(temp_df, "bookingStatNm")
+        sel_stat = st.multiselect("예약 유형 선택", stat_options, placeholder="선택하지 않으면 전체", key="rent_f_stat")
     with c3:
         room_word = st.text_input("강의실명 검색", "", key="rent_f_room")
         
@@ -319,22 +361,6 @@ elif selected_menu == "🏢 시설 대관":
     with c4:
         start_date = st.date_input("검색 시작일", value=datetime.date.today(), key="rent_s_date")
         
-    # 필터 하단에 검색 버튼 배치
-    search_btn = st.button("🔍 검색", key="rent_btn", use_container_width=True)
-
-    if search_btn:
-        url = "https://openapi.50plus.or.kr/openapi/service/rental/list"
-        params = {
-            "_type": "json",
-            "accessKey": api_key,
-            "year": year
-        }
-        all_items, total = fetch_all_pages(url, params)
-        if all_items is not None:
-            st.session_state["rent_data"] = all_items
-            st.session_state["rent_total"] = total
-            st.rerun()
-                
     if st.session_state["rent_data"]:
         df = pd.DataFrame(st.session_state["rent_data"])
         
@@ -349,10 +375,8 @@ elif selected_menu == "🏢 시설 대관":
         df_rename = df.rename(columns=rent_col_mapping)
         
         filtered_df = df_rename.copy()
-        if "기관명" in filtered_df.columns and sel_org != "전체":
-            filtered_df = filtered_df[filtered_df["기관명"] == sel_org]
-        if "예약상태명" in filtered_df.columns and sel_stat != "전체":
-            filtered_df = filtered_df[filtered_df["예약상태명"] == sel_stat]
+        filtered_df = apply_multi_select_filter(filtered_df, "기관명", sel_org)
+        filtered_df = apply_multi_select_filter(filtered_df, "예약상태명", sel_stat)
         if "강의실명" in filtered_df.columns and room_word:
             filtered_df = filtered_df[filtered_df["강의실명"].astype(str).str.contains(room_word, case=False, na=False)]
         if "확정일" in filtered_df.columns:
@@ -389,25 +413,28 @@ elif selected_menu == "💼 일반 일자리":
     if "job_data" not in st.session_state:
         st.session_state["job_data"] = []
         st.session_state["job_total"] = 0
+
+    ensure_data_loaded(
+        "job_data",
+        "https://openapi.50plus.or.kr/openapi/service/job2/list",
+        [
+            {"_type": "json", "accessKey": api_key, "year": year},
+            {"_type": "json", "accessKey": api_key},
+        ]
+    )
         
     st.markdown("### 🔍 조건 필터 및 상세 검색")
     c1, c2, c3 = st.columns(3)
     with c1:
         search_word = st.text_input("사업명 / 사업구분 검색", "", key="job_f_word")
     with c2:
-        if st.session_state["job_data"]:
-            temp_df = pd.DataFrame(st.session_state["job_data"])
-            org_options = ["전체"] + sorted(list(temp_df["orgNm"].dropna().unique())) if "orgNm" in temp_df.columns else ["전체"]
-        else:
-            org_options = ["전체"]
-        sel_org = st.selectbox("운영 기관 선택", org_options, key="job_f_org")
+        temp_df = pd.DataFrame(st.session_state["job_data"]) if st.session_state["job_data"] else pd.DataFrame()
+        org_options = build_multi_options(temp_df, "orgNm")
+        sel_org = st.multiselect("운영 기관 선택", org_options, placeholder="선택하지 않으면 전체", key="job_f_org")
     with c3:
-        if st.session_state["job_data"]:
-            temp_df = pd.DataFrame(st.session_state["job_data"])
-            stat_options = ["전체"] + list(temp_df["annRcrtStatNm"].dropna().unique()) if "annRcrtStatNm" in temp_df.columns else ["전체"]
-        else:
-            stat_options = ["전체"]
-        sel_stat = st.selectbox("모집 상태 선택", stat_options, key="job_f_stat")
+        temp_df = pd.DataFrame(st.session_state["job_data"]) if st.session_state["job_data"] else pd.DataFrame()
+        stat_options = build_multi_options(temp_df, "annRcrtStatNm")
+        sel_stat = st.multiselect("모집 상태 선택", stat_options, placeholder="선택하지 않으면 전체", key="job_f_stat")
         
     c4, c5 = st.columns(2)
     with c4:
@@ -426,22 +453,6 @@ elif selected_menu == "💼 일반 일자리":
                     pass
         sel_pay = st.slider("최소 활동비 금액(원)", 0, max_pay, 0, step=10000, key="job_pay_slider")
         
-    # 필터 하단에 검색 버튼 배치
-    search_btn = st.button("🔍 검색", key="job_btn", use_container_width=True)
-        
-    if search_btn:
-        url = "https://openapi.50plus.or.kr/openapi/service/job2/list"
-        params = {
-            "_type": "json",
-            "accessKey": api_key,
-            "year": year
-        }
-        all_items, total = fetch_all_pages(url, params)
-        if all_items is not None:
-            st.session_state["job_data"] = all_items
-            st.session_state["job_total"] = total
-            st.rerun()
-                
     if st.session_state["job_data"]:
         df = pd.DataFrame(st.session_state["job_data"])
         
@@ -468,10 +479,8 @@ elif selected_menu == "💼 일반 일자리":
             biz_mask = filtered_df["사업명"].astype(str).str.contains(search_word, case=False, na=False) if "사업명" in filtered_df.columns else False
             se_mask = filtered_df["사업구분명"].astype(str).str.contains(search_word, case=False, na=False) if "사업구분명" in filtered_df.columns else False
             filtered_df = filtered_df[biz_mask | se_mask]
-        if "운영기관명" in filtered_df.columns and sel_org != "전체":
-            filtered_df = filtered_df[filtered_df["운영기관명"] == sel_org]
-        if "공고모집상태" in filtered_df.columns and sel_stat != "전체":
-            filtered_df = filtered_df[filtered_df["공고모집상태"] == sel_stat]
+        filtered_df = apply_multi_select_filter(filtered_df, "운영기관명", sel_org)
+        filtered_df = apply_multi_select_filter(filtered_df, "공고모집상태", sel_stat)
         if "활동비(원)" in filtered_df.columns:
             filtered_df = filtered_df[filtered_df["활동비(원)"] >= sel_pay]
         if "신청종료일" in filtered_df.columns:
@@ -508,25 +517,25 @@ elif selected_menu == "🤝 가치동행 일자리":
     if "vjob_data" not in st.session_state:
         st.session_state["vjob_data"] = []
         st.session_state["vjob_total"] = 0
+
+    ensure_data_loaded(
+        "vjob_data",
+        "https://openapi.50plus.or.kr/openapi/service/job1/list",
+        [{"_type": "json", "accessKey": api_key, "year": year}]
+    )
         
     st.markdown("### 🔍 조건 필터 및 상세 검색")
     c1, c2, c3 = st.columns(3)
     with c1:
         search_word = st.text_input("가치동행 사업명 검색", "", key="vjob_f_word")
     with c2:
-        if st.session_state["vjob_data"]:
-            temp_df = pd.DataFrame(st.session_state["vjob_data"])
-            org_options = ["전체"] + sorted(list(temp_df["orgNm"].dropna().unique())) if "orgNm" in temp_df.columns else ["전체"]
-        else:
-            org_options = ["전체"]
-        sel_org = st.selectbox("운영 기관 선택", org_options, key="vjob_f_org")
+        temp_df = pd.DataFrame(st.session_state["vjob_data"]) if st.session_state["vjob_data"] else pd.DataFrame()
+        org_options = build_multi_options(temp_df, "orgNm")
+        sel_org = st.multiselect("운영 기관 선택", org_options, placeholder="선택하지 않으면 전체", key="vjob_f_org")
     with c3:
-        if st.session_state["vjob_data"]:
-            temp_df = pd.DataFrame(st.session_state["vjob_data"])
-            stat_options = ["전체"] + list(temp_df["annApprvStatView"].dropna().unique()) if "annApprvStatView" in temp_df.columns else ["전체"]
-        else:
-            stat_options = ["전체"]
-        sel_stat = st.selectbox("공고 승인 상태 선택", stat_options, key="vjob_f_stat")
+        temp_df = pd.DataFrame(st.session_state["vjob_data"]) if st.session_state["vjob_data"] else pd.DataFrame()
+        stat_options = build_multi_options(temp_df, "annApprvStatView")
+        sel_stat = st.multiselect("공고 승인 상태 선택", stat_options, placeholder="선택하지 않으면 전체", key="vjob_f_stat")
         
     c4, c5 = st.columns(2)
     with c4:
@@ -545,22 +554,6 @@ elif selected_menu == "🤝 가치동행 일자리":
                     pass
         sel_pay = st.slider("최소 활동비 금액(원)", 0, max_pay, 0, step=10000, key="vjob_pay_slider")
         
-    # 필터 하단에 검색 버튼 배치
-    search_btn = st.button("🔍 검색", key="vjob_btn", use_container_width=True)
-        
-    if search_btn:
-        url = "https://openapi.50plus.or.kr/openapi/service/job1/list"
-        params = {
-            "_type": "json",
-            "accessKey": api_key,
-            "year": year
-        }
-        all_items, total = fetch_all_pages(url, params)
-        if all_items is not None:
-            st.session_state["vjob_data"] = all_items
-            st.session_state["vjob_total"] = total
-            st.rerun()
-                
     if st.session_state["vjob_data"]:
         df = pd.DataFrame(st.session_state["vjob_data"])
         
@@ -584,10 +577,8 @@ elif selected_menu == "🤝 가치동행 일자리":
         filtered_df = df_rename.copy()
         if search_word:
             filtered_df = filtered_df[filtered_df["사업명"].astype(str).str.contains(search_word, case=False, na=False)]
-        if "운영기관명" in filtered_df.columns and sel_org != "전체":
-            filtered_df = filtered_df[filtered_df["운영기관명"] == sel_org]
-        if "공고승인상태" in filtered_df.columns and sel_stat != "전체":
-            filtered_df = filtered_df[filtered_df["공고승인상태"] == sel_stat]
+        filtered_df = apply_multi_select_filter(filtered_df, "운영기관명", sel_org)
+        filtered_df = apply_multi_select_filter(filtered_df, "공고승인상태", sel_stat)
         if "활동비(원)" in filtered_df.columns:
             filtered_df = filtered_df[filtered_df["활동비(원)"] >= sel_pay]
         if "신청종료일" in filtered_df.columns:
@@ -615,4 +606,4 @@ elif selected_menu == "🤝 가치동행 일자리":
             mime="text/csv",
             use_container_width=True
         )
-
+
