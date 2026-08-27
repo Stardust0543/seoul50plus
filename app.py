@@ -175,6 +175,9 @@ def ensure_data_loaded(session_key, url, params_candidates):
     elif error:
         st.error(error)
 
+def to_excel_friendly_csv(df):
+    return df.to_csv(index=False).encode("cp949", errors="replace")
+
 # 데이터 전체 호출 헬퍼 함수
 def fetch_all_pages(url, params, load_limit=1000):
     with st.spinner("실시간 데이터를 수집하는 중..."):
@@ -317,10 +320,10 @@ if selected_menu == "🎓 교육 과정":
         existing_display_cols = [c for c in display_cols if c in filtered_df.columns]
         other_cols = [c for c in filtered_df.columns if c not in existing_display_cols]
         filtered_df = filtered_df[existing_display_cols + other_cols]
-        
+
         st.dataframe(filtered_df, use_container_width=True)
         
-        csv_data = filtered_df.to_csv(index=False, encoding='utf-8-sig')
+        csv_data = to_excel_friendly_csv(filtered_df)
         st.download_button(
             label="📥 필터링된 교육 리스트 CSV 다운로드",
             data=csv_data,
@@ -396,7 +399,7 @@ elif selected_menu == "🏢 시설 대관":
         
         st.dataframe(filtered_df, use_container_width=True)
         
-        csv_data = filtered_df.to_csv(index=False, encoding='utf-8-sig')
+        csv_data = to_excel_friendly_csv(filtered_df)
         st.download_button(
             label="📥 필터링된 대관 리스트 CSV 다운로드",
             data=csv_data,
@@ -500,7 +503,7 @@ elif selected_menu == "💼 일반 일자리":
         
         st.dataframe(filtered_df, use_container_width=True)
         
-        csv_data = filtered_df.to_csv(index=False, encoding='utf-8-sig')
+        csv_data = to_excel_friendly_csv(filtered_df)
         st.download_button(
             label="📥 필터링된 일자리 리스트 CSV 다운로드",
             data=csv_data,
@@ -598,7 +601,7 @@ elif selected_menu == "🤝 가치동행 일자리":
         
         st.dataframe(filtered_df, use_container_width=True)
         
-        csv_data = filtered_df.to_csv(index=False, encoding='utf-8-sig')
+        csv_data = to_excel_friendly_csv(filtered_df)
         st.download_button(
             label="📥 필터링된 가치동행 리스트 CSV 다운로드",
             data=csv_data,
