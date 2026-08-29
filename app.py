@@ -16,7 +16,7 @@ st.set_page_config(
 st.markdown("""
     <style>
     .main-title {
-        font-size: 38px;
+        font-size: 24px;
         font-weight: 800;
         color: #1E3A8A;
         margin-bottom: 5px;
@@ -220,7 +220,7 @@ st.sidebar.markdown("""
 # --- 1. 교육 과정 메뉴 ---
 if selected_menu == "🎓 교육 과정":
     st.markdown("## 🎓 교육 과정 조회")
-    st.caption("50플러스 교육 과정의 상세 조건 필터링 및 다운로드 기능을 제공합니다.")
+    st.caption("50플러스 교육 과정의 상세 조건 검색과 다운로드 기능을 제공합니다. 50플러스 정책상 링크는 제공해드리지 못합니다. 교육 과정의 세부 내용은 50플러스 홈페이지에서 확인하세요.")
     
     # 세션 상태 초기화 및 기본값 세팅
     if "edu_data" not in st.session_state:
