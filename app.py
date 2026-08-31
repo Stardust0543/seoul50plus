@@ -65,7 +65,7 @@ year = st.sidebar.selectbox(
 )
 
 # 사이드바 메뉴 배치
-menu_options = ["🎓 교육 과정", "🏢 시설 대관", "💼 일반 일자리", "🤝 가치동행 일자리"]
+menu_options = ["🎓 교육 과정", "💼 일반 일자리", "🤝 가치동행 일자리"]
 selected_menu = st.sidebar.radio(
     "📖 메뉴 선택",
     options=menu_options
